@@ -22,14 +22,35 @@ use crate::keyring::*;
 use node_runtime::{
 	constants::currency::*, wasm_binary_unwrap, AccountId, BabeConfig, BalancesConfig,
 	GenesisConfig, GrandpaConfig, IndicesConfig, SessionConfig, SocietyConfig, StakerStatus,
-	StakingConfig, SystemConfig, BABE_GENESIS_EPOCH_CONFIG,
+	StakingConfig, SystemConfig, BABE_GENESIS_EPOCH_CONFIG, EVMConfig, EthereumConfig, AuraConfig,
+	Signature
 };
+use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+use sp_finality_grandpa::AuthorityId as GrandpaId;
 use sp_keyring::{Ed25519Keyring, Sr25519Keyring};
 use sp_runtime::Perbill;
+use std::{collections::BTreeMap, str::FromStr};
+use sp_core::{sr25519, Pair, Public, H160, U256};
+use sp_runtime::traits::{IdentifyAccount, Verify};
+
 
 /// Create genesis runtime configuration for tests.
 pub fn config(code: Option<&[u8]>) -> GenesisConfig {
 	config_endowed(code, Default::default())
+}
+
+/// Generate a crypto pair from seed.
+pub fn get_from_seed<TPublic: Public>(seed: &str) -> <TPublic::Pair as Pair>::Public {
+	TPublic::Pair::from_string(&format!("//{}", seed), None)
+		.expect("static values are valid; qed")
+		.public()
+}
+
+type AccountPublic = <Signature as Verify>::Signer;
+
+/// Generate an Aura authority key.
+pub fn authority_keys_from_seed(s: &str) -> (AuraId, GrandpaId) {
+	(get_from_seed::<AuraId>(s), get_from_seed::<GrandpaId>(s))
 }
 
 /// Create genesis runtime configuration for tests with some extra
@@ -45,7 +66,10 @@ pub fn config_endowed(code: Option<&[u8]>, extra_endowed: Vec<AccountId>) -> Gen
 	];
 
 	endowed.extend(extra_endowed.into_iter().map(|endowed| (endowed, 100 * DOLLARS)));
-
+	let initial_authorities: Vec<(AuraId, GrandpaId)> = vec![
+		authority_keys_from_seed("Alice"),
+		authority_keys_from_seed("Bob"),
+	];
 	GenesisConfig {
 		system: SystemConfig {
 			code: code.map(|x| x.to_vec()).unwrap_or_else(|| wasm_binary_unwrap().to_vec()),
@@ -93,5 +117,44 @@ pub fn config_endowed(code: Option<&[u8]>, extra_endowed: Vec<AccountId>) -> Gen
 		transaction_storage: Default::default(),
 		transaction_payment: Default::default(),
 		nomination_pools: Default::default(),
+		evm: EVMConfig {
+			accounts: {
+				let mut map = BTreeMap::new();
+				map.insert(
+					// H160 address of Alice dev account
+					// Derived from SS58 (42 prefix) address
+					// SS58: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+					// hex: 0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d
+					// Using the full hex key, truncating to the first 20 bytes (the first 40 hex chars)
+					H160::from_str("d43593c715fdd31c61141abd04a99fd6822c8558")
+						.expect("internal H160 is valid; qed"),
+					fp_evm::GenesisAccount {
+						balance: U256::from_str("0xffffffffffffffffffffffffffffffff")
+							.expect("internal U256 is valid; qed"),
+						code: Default::default(),
+						nonce: Default::default(),
+						storage: Default::default(),
+					},
+				);
+				map.insert(
+					// H160 address of CI test runner account
+					H160::from_str("6be02d1d3665660d22ff9624b7be0551ee1ac91b")
+						.expect("internal H160 is valid; qed"),
+					fp_evm::GenesisAccount {
+						balance: U256::from_str("0xffffffffffffffffffffffffffffffff")
+							.expect("internal U256 is valid; qed"),
+						code: Default::default(),
+						nonce: Default::default(),
+						storage: Default::default(),
+					},
+				);
+				map
+			},
+		},
+		ethereum: EthereumConfig {},
+		aura: AuraConfig {
+			authorities: initial_authorities.iter().map(|x| (x.0.clone())).collect(),
+		},
+		base_fee: Default::default(),
 	}
 }

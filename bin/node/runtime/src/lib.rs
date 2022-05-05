@@ -22,6 +22,7 @@
 // `construct_runtime!` does a lot of recursion and requires us to increase the limit to 256.
 #![recursion_limit = "256"]
 
+// use fp_rpc::TransactionStatus;
 use codec::{Decode, Encode, MaxEncodedLen};
 use frame_election_provider_support::{onchain, ExtendedBalance, SequentialPhragmen, VoteWeight};
 use frame_support::{
@@ -31,13 +32,13 @@ use frame_support::{
 	traits::{
 		AsEnsureOriginWithArg, ConstU128, ConstU16, ConstU32, Currency, EnsureOneOf,
 		EqualPrivilegeOnly, Everything, Imbalance, InstanceFilter, KeyOwnerProofSystem,
-		LockIdentifier, Nothing, OnUnbalanced, U128CurrencyToVote,
+		LockIdentifier, Nothing, OnUnbalanced, U128CurrencyToVote, FindAuthor
 	},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		ConstantMultiplier, DispatchClass, IdentityFee, Weight,
 	},
-	PalletId, RuntimeDebug,
+	PalletId, RuntimeDebug, ConsensusEngineId
 };
 use frame_system::{
 	limits::{BlockLength, BlockWeights},
@@ -50,14 +51,17 @@ use pallet_election_provider_multi_phase::SolutionAccuracyOf;
 use pallet_grandpa::{
 	fg_primitives, AuthorityId as GrandpaId, AuthorityList as GrandpaAuthorityList,
 };
+use pallet_ethereum::{Call::transact, Transaction as EthereumTransaction};
+use pallet_evm::{Account as EVMAccount, EnsureAddressTruncated, HashedAddressMapping, Runner};
 use pallet_im_online::sr25519::AuthorityId as ImOnlineId;
 use pallet_session::historical::{self as pallet_session_historical};
 pub use pallet_transaction_payment::{CurrencyAdapter, Multiplier, TargetedFeeAdjustment};
 use pallet_transaction_payment::{FeeDetails, RuntimeDispatchInfo};
 use sp_api::impl_runtime_apis;
 use sp_authority_discovery::AuthorityId as AuthorityDiscoveryId;
-use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
+use sp_core::{crypto::{KeyTypeId, ByteArray}, OpaqueMetadata, H160, H256, U256 };
 use sp_inherents::{CheckInherentsResult, InherentData};
+use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{
 	create_runtime_str,
 	curve::PiecewiseLinear,
@@ -69,7 +73,7 @@ use sp_runtime::{
 	transaction_validity::{TransactionPriority, TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult, FixedPointNumber, Perbill, Percent, Permill, Perquintill,
 };
-use sp_std::prelude::*;
+use sp_std::{marker::PhantomData, prelude::*};
 #[cfg(any(feature = "std", test))]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
@@ -85,6 +89,9 @@ pub use pallet_staking::StakerStatus;
 pub use pallet_sudo::Call as SudoCall;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
+
+mod precompiles;
+use precompiles::FrontierPrecompiles;
 
 /// Implementations of some helper traits passed into runtime modules as associated types.
 pub mod impls;
@@ -1446,6 +1453,80 @@ impl pallet_state_trie_migration::Config for Runtime {
 	type WeightInfo = ();
 }
 
+frame_support::parameter_types! {
+	pub IsActive: bool = true;
+	pub DefaultBaseFeePerGas: U256 = U256::from(1_000_000_000);
+}
+
+pub struct BaseFeeThreshold;
+impl pallet_base_fee::BaseFeeThreshold for BaseFeeThreshold {
+	fn lower() -> Permill {
+		Permill::zero()
+	}
+	fn ideal() -> Permill {
+		Permill::from_parts(500_000)
+	}
+	fn upper() -> Permill {
+		Permill::from_parts(1_000_000)
+	}
+}
+
+impl pallet_base_fee::Config for Runtime {
+	type Event = Event;
+	type Threshold = BaseFeeThreshold;
+	type IsActive = IsActive;
+	type DefaultBaseFeePerGas = DefaultBaseFeePerGas;
+}
+
+pub struct FindAuthorTruncated<F>(PhantomData<F>);
+impl<F: FindAuthor<u32>> FindAuthor<H160> for FindAuthorTruncated<F> {
+	fn find_author<'a, I>(digests: I) -> Option<H160>
+	where
+		I: 'a + IntoIterator<Item = (ConsensusEngineId, &'a [u8])>,
+	{
+		if let Some(author_index) = F::find_author(digests) {
+			let authority_id = Aura::authorities()[author_index as usize].clone();
+			return Some(H160::from_slice(&authority_id.to_raw_vec()[4..24]));
+		}
+		None
+	}
+}
+
+parameter_types! {
+	pub const ChainId: u64 = 42;
+	pub BlockGasLimit: U256 = U256::from(u32::max_value());
+	pub PrecompilesValue: FrontierPrecompiles<Runtime> = FrontierPrecompiles::<_>::new();
+}
+
+impl pallet_evm::Config for Runtime {
+	type FeeCalculator = BaseFee;
+	type GasWeightMapping = ();
+	type BlockHashMapping = pallet_ethereum::EthereumBlockHashMapping<Self>;
+	type CallOrigin = EnsureAddressTruncated;
+	type WithdrawOrigin = EnsureAddressTruncated;
+	type AddressMapping = HashedAddressMapping<BlakeTwo256>;
+	type Currency = Balances;
+	type Event = Event;
+	type Runner = pallet_evm::runner::stack::Runner<Self>;
+	type PrecompilesType = FrontierPrecompiles<Self>;
+	type PrecompilesValue = PrecompilesValue;
+	type ChainId = ChainId;
+	type BlockGasLimit = BlockGasLimit;
+	type OnChargeTransaction = ();
+	type FindAuthor = FindAuthorTruncated<Aura>;
+}
+
+impl pallet_ethereum::Config for Runtime {
+	type Event = Event;
+	type StateRoot = pallet_ethereum::IntermediateStateRoot<Self>;
+}
+
+impl pallet_aura::Config for Runtime {
+	type AuthorityId = AuraId;
+	type DisabledValidators = ();
+	type MaxAuthorities = MaxAuthorities;
+}
+
 construct_runtime!(
 	pub enum Runtime where
 		Block = Block,
@@ -1504,6 +1585,10 @@ construct_runtime!(
 		ConvictionVoting: pallet_conviction_voting,
 		Whitelist: pallet_whitelist,
 		NominationPools: pallet_nomination_pools,
+		Ethereum: pallet_ethereum::{Pallet, Call, Storage, Event, Config, Origin},
+		EVM: pallet_evm::{Pallet, Config, Call, Storage, Event<T>},
+		BaseFee: pallet_base_fee::{Pallet, Call, Storage, Config<T>, Event},
+		Aura: pallet_aura::{Pallet, Config<T>},
 	}
 );
 
@@ -1960,6 +2045,141 @@ impl_runtime_apis! {
 			Ok(batches)
 		}
 	}
+
+	// impl fp_rpc::EthereumRuntimeRPCApi<Block> for Runtime {
+	// 	fn chain_id() -> u64 {
+	// 		<Runtime as pallet_evm::Config>::ChainId::get()
+	// 	}
+
+	// 	fn account_basic(address: H160) -> EVMAccount {
+	// 		EVM::account_basic(&address)
+	// 	}
+
+	// 	fn gas_price() -> U256 {
+	// 		<Runtime as pallet_evm::Config>::FeeCalculator::min_gas_price()
+	// 	}
+
+	// 	fn account_code_at(address: H160) -> Vec<u8> {
+	// 		EVM::account_codes(address)
+	// 	}
+
+	// 	fn author() -> H160 {
+	// 		<pallet_evm::Pallet<Runtime>>::find_author()
+	// 	}
+
+	// 	fn storage_at(address: H160, index: U256) -> H256 {
+	// 		let mut tmp = [0u8; 32];
+	// 		index.to_big_endian(&mut tmp);
+	// 		EVM::account_storages(address, H256::from_slice(&tmp[..]))
+	// 	}
+
+	// 	fn call(
+	// 		from: H160,
+	// 		to: H160,
+	// 		data: Vec<u8>,
+	// 		value: U256,
+	// 		gas_limit: U256,
+	// 		max_fee_per_gas: Option<U256>,
+	// 		max_priority_fee_per_gas: Option<U256>,
+	// 		nonce: Option<U256>,
+	// 		estimate: bool,
+	// 		access_list: Option<Vec<(H160, Vec<H256>)>>,
+	// 	) -> Result<pallet_evm::CallInfo, sp_runtime::DispatchError> {
+	// 		let config = if estimate {
+	// 			let mut config = <Runtime as pallet_evm::Config>::config().clone();
+	// 			config.estimate = true;
+	// 			Some(config)
+	// 		} else {
+	// 			None
+	// 		};
+
+	// 		let is_transactional = false;
+	// 		<Runtime as pallet_evm::Config>::Runner::call(
+	// 			from,
+	// 			to,
+	// 			data,
+	// 			value,
+	// 			gas_limit.low_u64(),
+	// 			max_fee_per_gas,
+	// 			max_priority_fee_per_gas,
+	// 			nonce,
+	// 			access_list.unwrap_or_default(),
+	// 			is_transactional,
+	// 			config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
+	// 		).map_err(|err| err.into())
+	// 	}
+
+	// 	fn create(
+	// 		from: H160,
+	// 		data: Vec<u8>,
+	// 		value: U256,
+	// 		gas_limit: U256,
+	// 		max_fee_per_gas: Option<U256>,
+	// 		max_priority_fee_per_gas: Option<U256>,
+	// 		nonce: Option<U256>,
+	// 		estimate: bool,
+	// 		access_list: Option<Vec<(H160, Vec<H256>)>>,
+	// 	) -> Result<pallet_evm::CreateInfo, sp_runtime::DispatchError> {
+	// 		let config = if estimate {
+	// 			let mut config = <Runtime as pallet_evm::Config>::config().clone();
+	// 			config.estimate = true;
+	// 			Some(config)
+	// 		} else {
+	// 			None
+	// 		};
+
+	// 		let is_transactional = false;
+	// 		<Runtime as pallet_evm::Config>::Runner::create(
+	// 			from,
+	// 			data,
+	// 			value,
+	// 			gas_limit.low_u64(),
+	// 			max_fee_per_gas,
+	// 			max_priority_fee_per_gas,
+	// 			nonce,
+	// 			access_list.unwrap_or_default(),
+	// 			is_transactional,
+	// 			config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
+	// 		).map_err(|err| err.into())
+	// 	}
+
+	// 	fn current_transaction_statuses() -> Option<Vec<TransactionStatus>> {
+	// 		Ethereum::current_transaction_statuses()
+	// 	}
+
+	// 	fn current_block() -> Option<pallet_ethereum::Block> {
+	// 		Ethereum::current_block()
+	// 	}
+
+	// 	fn current_receipts() -> Option<Vec<pallet_ethereum::Receipt>> {
+	// 		Ethereum::current_receipts()
+	// 	}
+
+	// 	fn current_all() -> (
+	// 		Option<pallet_ethereum::Block>,
+	// 		Option<Vec<pallet_ethereum::Receipt>>,
+	// 		Option<Vec<TransactionStatus>>
+	// 	) {
+	// 		(
+	// 			Ethereum::current_block(),
+	// 			Ethereum::current_receipts(),
+	// 			Ethereum::current_transaction_statuses()
+	// 		)
+	// 	}
+
+	// 	fn extrinsic_filter(
+	// 		xts: Vec<<Block as BlockT>::Extrinsic>,
+	// 	) -> Vec<EthereumTransaction> {
+	// 		xts.into_iter().filter_map(|xt| match xt.0.function {
+	// 			Call::Ethereum(transact { transaction }) => Some(transaction),
+	// 			_ => None
+	// 		}).collect::<Vec<EthereumTransaction>>()
+	// 	}
+
+	// 	fn elasticity() -> Option<Permill> {
+	// 		Some(BaseFee::elasticity())
+	// 	}
+	// }
 }
 
 #[cfg(test)]
