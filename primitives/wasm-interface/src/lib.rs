@@ -21,7 +21,7 @@
 
 use sp_std::{borrow::Cow, iter::Iterator, marker::PhantomData, mem, result, vec, vec::Vec};
 
-#[cfg(feature = "wasmi")]
+#[cfg(feature = "std")]
 mod wasmi_impl;
 
 #[cfg(not(all(feature = "std", feature = "wasmtime")))]

@@ -127,12 +127,15 @@ where
 		let converted_fee = CON::to_asset_balance(fee, asset_id)
 			.map_err(|_| TransactionValidityError::from(InvalidTransaction::Payment))?
 			.max(min_converted_fee);
-		let can_withdraw =
-			<T::Fungibles as Inspect<T::AccountId>>::can_withdraw(asset_id, who, converted_fee);
+		let can_withdraw = <T::Fungibles as Inspect<T::AccountId>>::can_withdraw(
+			asset_id.into(),
+			who,
+			converted_fee,
+		);
 		if !matches!(can_withdraw, WithdrawConsequence::Success) {
 			return Err(InvalidTransaction::Payment.into())
 		}
-		<T::Fungibles as Balanced<T::AccountId>>::withdraw(asset_id, who, converted_fee)
+		<T::Fungibles as Balanced<T::AccountId>>::withdraw(asset_id.into(), who, converted_fee)
 			.map_err(|_| TransactionValidityError::from(InvalidTransaction::Payment))
 	}
 
@@ -150,7 +153,7 @@ where
 	) -> Result<(), TransactionValidityError> {
 		let min_converted_fee = if corrected_fee.is_zero() { Zero::zero() } else { One::one() };
 		// Convert the corrected fee into the asset used for payment.
-		let converted_fee = CON::to_asset_balance(corrected_fee, paid.asset())
+		let converted_fee = CON::to_asset_balance(corrected_fee, paid.asset().into())
 			.map_err(|_| -> TransactionValidityError { InvalidTransaction::Payment.into() })?
 			.max(min_converted_fee);
 		// Calculate how much refund we should return.

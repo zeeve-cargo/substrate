@@ -45,4 +45,3 @@ mod command_helper;
 pub use cli::*;
 #[cfg(feature = "cli")]
 pub use command::*;
-mod keys;

@@ -53,9 +53,11 @@ fn main() {
 			let stake_of = |who: &AccountId| -> VoteWeight { *stake_of_tree.get(who).unwrap() };
 
 			let unbalanced_score = {
-				let staked =
-					assignment_ratio_to_staked_normalized(unbalanced.assignments, &stake_of)
-						.unwrap();
+				let staked = assignment_ratio_to_staked_normalized(
+					unbalanced.assignments.clone(),
+					&stake_of,
+				)
+				.unwrap();
 				let score = to_supports(&staked).evaluate();
 
 				if score.minimal_stake == 0 {
@@ -70,7 +72,8 @@ fn main() {
 
 			let balanced_score = {
 				let staked =
-					assignment_ratio_to_staked_normalized(balanced.assignments, &stake_of).unwrap();
+					assignment_ratio_to_staked_normalized(balanced.assignments.clone(), &stake_of)
+						.unwrap();
 				to_supports(staked.as_ref()).evaluate()
 			};
 

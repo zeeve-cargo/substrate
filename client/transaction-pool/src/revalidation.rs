@@ -92,7 +92,7 @@ async fn batch_revalidate<Api: ChainApi>(
 			},
 			Ok(Ok(validity)) => {
 				revalidated.insert(
-					ext_hash,
+					ext_hash.clone(),
 					ValidatedTransaction::valid_at(
 						at.saturated_into::<u64>(),
 						ext_hash,
@@ -194,14 +194,14 @@ impl<Api: ChainApi> RevalidationWorker<Api> {
 			self.block_ordered
 				.entry(block_number)
 				.and_modify(|value| {
-					value.insert(ext_hash);
+					value.insert(ext_hash.clone());
 				})
 				.or_insert_with(|| {
 					let mut bt = HashSet::new();
-					bt.insert(ext_hash);
+					bt.insert(ext_hash.clone());
 					bt
 				});
-			self.members.insert(ext_hash, block_number);
+			self.members.insert(ext_hash.clone(), block_number);
 		}
 	}
 

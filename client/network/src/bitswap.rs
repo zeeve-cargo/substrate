@@ -20,9 +20,12 @@
 //! Only supports bitswap 1.2.0.
 //! CID is expected to reference 256-bit Blake2b transaction hash.
 
-use crate::schema::bitswap::{
-	message::{wantlist::WantType, Block as MessageBlock, BlockPresence, BlockPresenceType},
-	Message as BitswapMessage,
+use crate::{
+	chain::Client,
+	schema::bitswap::{
+		message::{wantlist::WantType, Block as MessageBlock, BlockPresence, BlockPresenceType},
+		Message as BitswapMessage,
+	},
 };
 use cid::Version;
 use core::pin::Pin;
@@ -41,12 +44,10 @@ use libp2p::{
 };
 use log::{debug, error, trace};
 use prost::Message;
-use sc_client_api::BlockBackend;
 use sp_runtime::traits::Block as BlockT;
 use std::{
 	collections::VecDeque,
 	io,
-	marker::PhantomData,
 	sync::Arc,
 	task::{Context, Poll},
 };
@@ -65,7 +66,7 @@ const MAX_RESPONSE_QUEUE: usize = 20;
 // Max number of blocks per wantlist
 const MAX_WANTED_BLOCKS: usize = 16;
 
-const PROTOCOL_NAME: &[u8] = b"/ipfs/bitswap/1.2.0";
+const PROTOCOL_NAME: &'static [u8] = b"/ipfs/bitswap/1.2.0";
 
 type FutureResult<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send>>;
 
@@ -167,10 +168,10 @@ impl Prefix {
 		let version = varint_encode::u64(self.version.into(), &mut buf);
 		res.extend_from_slice(version);
 		let mut buf = varint_encode::u64_buffer();
-		let codec = varint_encode::u64(self.codec, &mut buf);
+		let codec = varint_encode::u64(self.codec.into(), &mut buf);
 		res.extend_from_slice(codec);
 		let mut buf = varint_encode::u64_buffer();
-		let mh_type = varint_encode::u64(self.mh_type, &mut buf);
+		let mh_type = varint_encode::u64(self.mh_type.into(), &mut buf);
 		res.extend_from_slice(mh_type);
 		let mut buf = varint_encode::u64_buffer();
 		let mh_len = varint_encode::u64(self.mh_len as u64, &mut buf);
@@ -180,34 +181,33 @@ impl Prefix {
 }
 
 /// Network behaviour that handles sending and receiving IPFS blocks.
-pub struct Bitswap<B, Client> {
-	client: Arc<Client>,
+pub struct Bitswap<B> {
+	client: Arc<dyn Client<B>>,
 	ready_blocks: VecDeque<(PeerId, BitswapMessage)>,
-	_block: PhantomData<B>,
 }
 
-impl<B, Client> Bitswap<B, Client> {
+impl<B: BlockT> Bitswap<B> {
 	/// Create a new instance of the bitswap protocol handler.
-	pub fn new(client: Arc<Client>) -> Self {
-		Self { client, ready_blocks: Default::default(), _block: PhantomData::default() }
+	pub fn new(client: Arc<dyn Client<B>>) -> Self {
+		Self { client, ready_blocks: Default::default() }
 	}
 }
 
-impl<B, Client> NetworkBehaviour for Bitswap<B, Client>
-where
-	B: BlockT,
-	Client: BlockBackend<B> + Send + Sync + 'static,
-{
-	type ConnectionHandler = OneShotHandler<BitswapConfig, BitswapMessage, HandlerEvent>;
+impl<B: BlockT> NetworkBehaviour for Bitswap<B> {
+	type ProtocolsHandler = OneShotHandler<BitswapConfig, BitswapMessage, HandlerEvent>;
 	type OutEvent = void::Void;
 
-	fn new_handler(&mut self) -> Self::ConnectionHandler {
+	fn new_handler(&mut self) -> Self::ProtocolsHandler {
 		Default::default()
 	}
 
 	fn addresses_of_peer(&mut self, _peer: &PeerId) -> Vec<Multiaddr> {
 		Vec::new()
 	}
+
+	fn inject_connected(&mut self, _peer: &PeerId) {}
+
+	fn inject_disconnected(&mut self, _peer: &PeerId) {}
 
 	fn inject_event(&mut self, peer: PeerId, _connection: ConnectionId, message: HandlerEvent) {
 		let request = match message {
@@ -300,7 +300,7 @@ where
 		&mut self,
 		_ctx: &mut Context,
 		_: &mut impl PollParameters,
-	) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
+	) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
 		if let Some((peer_id, message)) = self.ready_blocks.pop_front() {
 			return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
 				peer_id,

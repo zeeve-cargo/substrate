@@ -60,7 +60,7 @@ impl PurgeChainCmd {
 			io::stdin().read_line(&mut input)?;
 			let input = input.trim();
 
-			match input.chars().next() {
+			match input.chars().nth(0) {
 				Some('y') | Some('Y') => {},
 				_ => {
 					println!("Aborted");

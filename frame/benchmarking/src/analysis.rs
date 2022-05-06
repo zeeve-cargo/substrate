@@ -91,7 +91,7 @@ impl Analysis {
 			})
 			.collect();
 
-		values.sort_unstable();
+		values.sort();
 		let mid = values.len() / 2;
 
 		Some(Self {
@@ -216,7 +216,7 @@ impl Analysis {
 		}
 
 		for (_, rs) in results.iter_mut() {
-			rs.sort_unstable();
+			rs.sort();
 			let ql = rs.len() / 4;
 			*rs = rs[ql..rs.len() - ql].to_vec();
 		}
@@ -255,7 +255,7 @@ impl Analysis {
 			.iter()
 			.map(|(p, vs)| {
 				// Avoid divide by zero
-				if vs.is_empty() {
+				if vs.len() == 0 {
 					return (p.clone(), 0, 0)
 				}
 				let total = vs.iter().fold(0u128, |acc, v| acc + *v);

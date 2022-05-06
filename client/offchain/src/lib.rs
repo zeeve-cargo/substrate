@@ -74,11 +74,11 @@ where
 	H: ExHashT,
 {
 	fn set_authorized_peers(&self, peers: HashSet<PeerId>) {
-		NetworkService::set_authorized_peers(self, peers)
+		self.set_authorized_peers(peers)
 	}
 
 	fn set_authorized_only(&self, reserved_only: bool) {
-		NetworkService::set_authorized_only(self, reserved_only)
+		self.set_authorized_only(reserved_only)
 	}
 }
 

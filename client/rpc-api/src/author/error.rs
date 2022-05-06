@@ -89,12 +89,12 @@ impl From<Error> for rpc::Error {
 		match e {
 			Error::BadFormat(e) => rpc::Error {
 				code: rpc::ErrorCode::ServerError(BAD_FORMAT),
-				message: format!("Extrinsic has invalid format: {}", e),
+				message: format!("Extrinsic has invalid format: {}", e).into(),
 				data: None,
 			},
 			Error::Verification(e) => rpc::Error {
 				code: rpc::ErrorCode::ServerError(VERIFICATION_ERROR),
-				message: format!("Verification Error: {}", e),
+				message: format!("Verification Error: {}", e).into(),
 				data: Some(e.to_string().into()),
 			},
 			Error::Pool(PoolError::InvalidTransaction(InvalidTransaction::Custom(e))) => rpc::Error {

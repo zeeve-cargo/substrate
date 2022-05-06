@@ -188,7 +188,7 @@ where
 		len: usize,
 	) -> Result<(), TransactionValidityError> {
 		if info.class == DispatchClass::Mandatory {
-			return Err(InvalidTransaction::MandatoryDispatch.into())
+			Err(InvalidTransaction::MandatoryDispatch)?
 		}
 		Self::do_pre_dispatch(info, len)
 	}
@@ -201,7 +201,7 @@ where
 		len: usize,
 	) -> TransactionValidity {
 		if info.class == DispatchClass::Mandatory {
-			return Err(InvalidTransaction::MandatoryDispatch.into())
+			Err(InvalidTransaction::MandatoryDispatch)?
 		}
 		Self::do_validate(info, len)
 	}
@@ -234,7 +234,7 @@ where
 		// extrinsics that result in error.
 		if let (DispatchClass::Mandatory, Err(e)) = (info.class, result) {
 			log::error!(target: "runtime::system", "Bad mandatory: {:?}", e);
-			return Err(InvalidTransaction::BadMandatory.into())
+			Err(InvalidTransaction::BadMandatory)?
 		}
 
 		let unspent = post_info.calc_unspent(info);

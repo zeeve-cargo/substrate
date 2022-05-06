@@ -263,7 +263,7 @@ where
 			state_cache_child_ratio: config.state_cache_child_ratio.map(|v| (v, 100)),
 			state_pruning: config.state_pruning.clone(),
 			source: config.database.clone(),
-			keep_blocks: config.keep_blocks,
+			keep_blocks: config.keep_blocks.clone(),
 		};
 
 		let backend = new_db_backend(db_config)?;
@@ -421,10 +421,10 @@ where
 			Some("offchain-worker"),
 			sc_offchain::notification_future(
 				config.role.is_authority(),
-				client,
+				client.clone(),
 				offchain,
 				Clone::clone(&spawn_handle),
-				network,
+				network.clone(),
 			),
 		);
 	}
@@ -487,13 +487,8 @@ where
 	)
 	.map_err(|e| Error::Application(Box::new(e)))?;
 
-	let sysinfo = sc_sysinfo::gather_sysinfo();
-	sc_sysinfo::print_sysinfo(&sysinfo);
-
 	let telemetry = telemetry
-		.map(|telemetry| {
-			init_telemetry(&mut config, network.clone(), client.clone(), telemetry, Some(sysinfo))
-		})
+		.map(|telemetry| init_telemetry(&mut config, network.clone(), client.clone(), telemetry))
 		.transpose()?;
 
 	info!("📦 Highest known block at #{}", chain_info.best_number);
@@ -517,7 +512,7 @@ where
 	let metrics_service =
 		if let Some(PrometheusConfig { port, registry }) = config.prometheus_config.clone() {
 			// Set static metrics.
-			let metrics = MetricsService::with_prometheus(telemetry, &registry, &config)?;
+			let metrics = MetricsService::with_prometheus(telemetry.clone(), &registry, &config)?;
 			spawn_handle.spawn(
 				"prometheus-endpoint",
 				None,
@@ -526,7 +521,7 @@ where
 
 			metrics
 		} else {
-			MetricsService::new(telemetry)
+			MetricsService::new(telemetry.clone())
 		};
 
 	// Periodically updated metrics and telemetry updates.
@@ -572,7 +567,7 @@ where
 		None,
 		sc_informant::build(
 			client.clone(),
-			network,
+			network.clone(),
 			transaction_pool.clone(),
 			config.informant_output_format,
 		),
@@ -614,16 +609,12 @@ fn init_telemetry<TBl: BlockT, TCl: BlockBackend<TBl>>(
 	network: Arc<NetworkService<TBl, <TBl as BlockT>::Hash>>,
 	client: Arc<TCl>,
 	telemetry: &mut Telemetry,
-	sysinfo: Option<sc_telemetry::SysInfo>,
 ) -> sc_telemetry::Result<TelemetryHandle> {
 	let genesis_hash = client.block_hash(Zero::zero()).ok().flatten().unwrap_or_default();
 	let connection_message = ConnectionMessage {
 		name: config.network.node_name.to_owned(),
 		implementation: config.impl_name.to_owned(),
 		version: config.impl_version.to_owned(),
-		target_os: sc_sysinfo::TARGET_OS.into(),
-		target_arch: sc_sysinfo::TARGET_ARCH.into(),
-		target_env: sc_sysinfo::TARGET_ENV.into(),
 		config: String::new(),
 		chain: config.chain_spec.name().to_owned(),
 		genesis_hash: format!("{:?}", genesis_hash),
@@ -634,7 +625,6 @@ fn init_telemetry<TBl: BlockT, TCl: BlockBackend<TBl>>(
 			.unwrap_or(0)
 			.to_string(),
 		network_id: network.local_peer_id().to_base58(),
-		sysinfo,
 	};
 
 	telemetry.start_telemetry(connection_message)?;

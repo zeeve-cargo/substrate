@@ -272,7 +272,7 @@ fn check_generics(
 		);
 		e.pop();
 		e.pop();
-		e.push('.');
+		e.push_str(".");
 		e
 	};
 
@@ -550,7 +550,7 @@ fn process_generics(
 	let args_span = segment.arguments.span();
 
 	let args = match &segment.arguments {
-		syn::PathArguments::AngleBracketed(args) if !args.args.is_empty() => args,
+		syn::PathArguments::AngleBracketed(args) if args.args.len() != 0 => args,
 		_ => {
 			let msg = "Invalid pallet::storage, invalid number of generic generic arguments, \
 				expect more that 0 generic arguments.";
@@ -646,16 +646,13 @@ impl StorageDef {
 		self.rename_as
 			.as_ref()
 			.map(syn::LitStr::value)
-			.unwrap_or_else(|| self.ident.to_string())
+			.unwrap_or(self.ident.to_string())
 	}
 
 	/// Return either the span of the ident or the span of the literal in the
 	/// #[storage_prefix] attribute
 	pub fn prefix_span(&self) -> proc_macro2::Span {
-		self.rename_as
-			.as_ref()
-			.map(syn::LitStr::span)
-			.unwrap_or_else(|| self.ident.span())
+		self.rename_as.as_ref().map(syn::LitStr::span).unwrap_or(self.ident.span())
 	}
 
 	pub fn try_from(
@@ -675,7 +672,8 @@ impl StorageDef {
 
 		let cfg_attrs = helper::get_item_cfg_attrs(&item.attrs);
 
-		let instances = vec![helper::check_type_def_gen(&item.generics, item.ident.span())?];
+		let mut instances = vec![];
+		instances.push(helper::check_type_def_gen(&item.generics, item.ident.span())?);
 
 		let where_clause = item.generics.where_clause.clone();
 		let docs = get_doc_literals(&item.attrs);

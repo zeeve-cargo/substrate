@@ -727,7 +727,7 @@ impl<T: Config> Pallet<T> {
 			Self::deposit_event(Event::Canceled { when, index });
 			Ok(())
 		} else {
-			return Err(Error::<T>::NotFound.into())
+			Err(Error::<T>::NotFound)?
 		}
 	}
 
@@ -765,7 +765,7 @@ impl<T: Config> Pallet<T> {
 	) -> Result<TaskAddress<T::BlockNumber>, DispatchError> {
 		// ensure id it is unique
 		if Lookup::<T>::contains_key(&id) {
-			return Err(Error::<T>::FailedToSchedule.into())
+			return Err(Error::<T>::FailedToSchedule)?
 		}
 
 		let when = Self::resolve_time(when)?;
@@ -817,7 +817,7 @@ impl<T: Config> Pallet<T> {
 				Self::deposit_event(Event::Canceled { when, index });
 				Ok(())
 			} else {
-				return Err(Error::<T>::NotFound.into())
+				Err(Error::<T>::NotFound)?
 			}
 		})
 	}

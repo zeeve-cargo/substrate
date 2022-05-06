@@ -49,8 +49,8 @@ use libp2p::{
 		RequestResponseConfig, RequestResponseEvent, RequestResponseMessage, ResponseChannel,
 	},
 	swarm::{
-		handler::multi::MultiHandler, ConnectionHandler, IntoConnectionHandler, NetworkBehaviour,
-		NetworkBehaviourAction, PollParameters,
+		protocols_handler::multi::MultiHandler, IntoProtocolsHandler, NetworkBehaviour,
+		NetworkBehaviourAction, PollParameters, ProtocolsHandler,
 	},
 };
 use std::{
@@ -355,21 +355,25 @@ impl RequestResponsesBehaviour {
 					(Instant::now(), pending_response),
 				);
 				debug_assert!(prev_req_id.is_none(), "Expect request id to be unique.");
-			} else if pending_response.send(Err(RequestFailure::NotConnected)).is_err() {
+			} else {
+				if pending_response.send(Err(RequestFailure::NotConnected)).is_err() {
+					log::debug!(
+						target: "sub-libp2p",
+						"Not connected to peer {:?}. At the same time local \
+						 node is no longer interested in the result.",
+						target,
+					);
+				};
+			}
+		} else {
+			if pending_response.send(Err(RequestFailure::UnknownProtocol)).is_err() {
 				log::debug!(
 					target: "sub-libp2p",
-					"Not connected to peer {:?}. At the same time local \
+					"Unknown protocol {:?}. At the same time local \
 					 node is no longer interested in the result.",
-					target,
+					protocol_name,
 				);
-			}
-		} else if pending_response.send(Err(RequestFailure::UnknownProtocol)).is_err() {
-			log::debug!(
-				target: "sub-libp2p",
-				"Unknown protocol {:?}. At the same time local \
-				 node is no longer interested in the result.",
-				protocol_name,
-			);
+			};
 		}
 	}
 
@@ -377,7 +381,7 @@ impl RequestResponsesBehaviour {
 		&mut self,
 		protocol: String,
 		handler: RequestResponseHandler<GenericCodec>,
-	) -> <RequestResponsesBehaviour as NetworkBehaviour>::ConnectionHandler {
+	) -> <RequestResponsesBehaviour as NetworkBehaviour>::ProtocolsHandler {
 		let mut handlers: HashMap<_, _> = self
 			.protocols
 			.iter_mut()
@@ -396,13 +400,11 @@ impl RequestResponsesBehaviour {
 }
 
 impl NetworkBehaviour for RequestResponsesBehaviour {
-	type ConnectionHandler = MultiHandler<
-		String,
-		<RequestResponse<GenericCodec> as NetworkBehaviour>::ConnectionHandler,
-	>;
+	type ProtocolsHandler =
+		MultiHandler<String, <RequestResponse<GenericCodec> as NetworkBehaviour>::ProtocolsHandler>;
 	type OutEvent = Event;
 
-	fn new_handler(&mut self) -> Self::ConnectionHandler {
+	fn new_handler(&mut self) -> Self::ProtocolsHandler {
 		let iter = self
 			.protocols
 			.iter_mut()
@@ -424,7 +426,6 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 		conn: &ConnectionId,
 		endpoint: &ConnectedPoint,
 		failed_addresses: Option<&Vec<Multiaddr>>,
-		other_established: usize,
 	) {
 		for (p, _) in self.protocols.values_mut() {
 			NetworkBehaviour::inject_connection_established(
@@ -433,8 +434,13 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 				conn,
 				endpoint,
 				failed_addresses,
-				other_established,
 			)
+		}
+	}
+
+	fn inject_connected(&mut self, peer_id: &PeerId) {
+		for (p, _) in self.protocols.values_mut() {
+			NetworkBehaviour::inject_connected(p, peer_id)
 		}
 	}
 
@@ -443,25 +449,17 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 		peer_id: &PeerId,
 		conn: &ConnectionId,
 		endpoint: &ConnectedPoint,
-		handler: <Self::ConnectionHandler as IntoConnectionHandler>::Handler,
-		remaining_established: usize,
+		_handler: <Self::ProtocolsHandler as IntoProtocolsHandler>::Handler,
 	) {
-		for (p_name, event) in handler.into_iter() {
-			if let Some((proto, _)) = self.protocols.get_mut(p_name.as_str()) {
-				proto.inject_connection_closed(
-					peer_id,
-					conn,
-					endpoint,
-					event,
-					remaining_established,
-				)
-			} else {
-				log::error!(
-					target: "sub-libp2p",
-					"inject_connection_closed: no request-response instance registered for protocol {:?}",
-					p_name,
-				)
-			}
+		for (p, _) in self.protocols.values_mut() {
+			let handler = p.new_handler();
+			NetworkBehaviour::inject_connection_closed(p, peer_id, conn, endpoint, handler);
+		}
+	}
+
+	fn inject_disconnected(&mut self, peer_id: &PeerId) {
+		for (p, _) in self.protocols.values_mut() {
+			NetworkBehaviour::inject_disconnected(p, peer_id)
 		}
 	}
 
@@ -469,7 +467,7 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 		&mut self,
 		peer_id: PeerId,
 		connection: ConnectionId,
-		(p_name, event): <Self::ConnectionHandler as ConnectionHandler>::OutEvent,
+		(p_name, event): <Self::ProtocolsHandler as ProtocolsHandler>::OutEvent,
 	) {
 		if let Some((proto, _)) = self.protocols.get_mut(&*p_name) {
 			return proto.inject_event(peer_id, connection, event)
@@ -501,7 +499,7 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 	fn inject_dial_failure(
 		&mut self,
 		peer_id: Option<PeerId>,
-		_: Self::ConnectionHandler,
+		_: Self::ProtocolsHandler,
 		error: &libp2p::swarm::DialError,
 	) {
 		for (p, _) in self.protocols.values_mut() {
@@ -538,7 +536,7 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 		&mut self,
 		cx: &mut Context,
 		params: &mut impl PollParameters,
-	) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
+	) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
 		'poll_all: loop {
 			if let Some(message_request) = self.message_request.take() {
 				// Now we can can poll `MessageRequest` until we get the reputation
@@ -595,7 +593,7 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 							// will be reported by the corresponding `RequestResponse` through
 							// an `InboundFailure::Omission` event.
 							let _ = resp_builder.try_send(IncomingRequest {
-								peer,
+								peer: peer.clone(),
 								payload: request,
 								pending_response: tx,
 							});
@@ -644,7 +642,7 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 
 				if let Ok(payload) = result {
 					if let Some((protocol, _)) = self.protocols.get_mut(&*protocol_name) {
-						if protocol.send_response(inner_channel, Ok(payload)).is_err() {
+						if let Err(_) = protocol.send_response(inner_channel, Ok(payload)) {
 							// Note: Failure is handled further below when receiving
 							// `InboundFailure` event from `RequestResponse` behaviour.
 							log::debug!(
@@ -654,9 +652,11 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 								 Dropping response",
 								request_id, protocol_name,
 							);
-						} else if let Some(sent_feedback) = sent_feedback {
-							self.send_feedback
-								.insert((protocol_name, request_id).into(), sent_feedback);
+						} else {
+							if let Some(sent_feedback) = sent_feedback {
+								self.send_feedback
+									.insert((protocol_name, request_id).into(), sent_feedback);
+							}
 						}
 					}
 				}
@@ -677,15 +677,25 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 
 						// Other events generated by the underlying behaviour are transparently
 						// passed through.
-						NetworkBehaviourAction::Dial { opts, handler } => {
-							if opts.get_peer_id().is_none() {
-								log::error!(
-									"The request-response isn't supposed to start dialing addresses"
-								);
-							}
+						NetworkBehaviourAction::DialAddress { address, handler } => {
+							log::error!(
+								"The request-response isn't supposed to start dialing peers"
+							);
 							let protocol = protocol.to_string();
 							let handler = self.new_handler_with_replacement(protocol, handler);
-							return Poll::Ready(NetworkBehaviourAction::Dial { opts, handler })
+							return Poll::Ready(NetworkBehaviourAction::DialAddress {
+								address,
+								handler,
+							})
+						},
+						NetworkBehaviourAction::DialPeer { peer_id, condition, handler } => {
+							let protocol = protocol.to_string();
+							let handler = self.new_handler_with_replacement(protocol, handler);
+							return Poll::Ready(NetworkBehaviourAction::DialPeer {
+								peer_id,
+								condition,
+								handler,
+							})
 						},
 						NetworkBehaviourAction::NotifyHandler { peer_id, handler, event } =>
 							return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
@@ -712,10 +722,13 @@ impl NetworkBehaviour for RequestResponsesBehaviour {
 							message:
 								RequestResponseMessage::Request { request_id, request, channel, .. },
 						} => {
-							self.pending_responses_arrival_time
-								.insert((protocol.clone(), request_id).into(), Instant::now());
+							self.pending_responses_arrival_time.insert(
+								(protocol.clone(), request_id.clone()).into(),
+								Instant::now(),
+							);
 
-							let get_peer_reputation = self.peerset.clone().peer_reputation(peer);
+							let get_peer_reputation =
+								self.peerset.clone().peer_reputation(peer.clone());
 							let get_peer_reputation = Box::pin(get_peer_reputation);
 
 							// Save the Future-like state with params to poll `get_peer_reputation`
@@ -1133,7 +1146,7 @@ mod tests {
 		// this test, so they wouldn't connect to each other.
 		{
 			let dial_addr = swarms[1].1.clone();
-			Swarm::dial(&mut swarms[0].0, dial_addr).unwrap();
+			Swarm::dial_addr(&mut swarms[0].0, dial_addr).unwrap();
 		}
 
 		let (mut swarm, _, peerset) = swarms.remove(0);
@@ -1233,7 +1246,7 @@ mod tests {
 		// this test, so they wouldn't connect to each other.
 		{
 			let dial_addr = swarms[1].1.clone();
-			Swarm::dial(&mut swarms[0].0, dial_addr).unwrap();
+			Swarm::dial_addr(&mut swarms[0].0, dial_addr).unwrap();
 		}
 
 		// Running `swarm[0]` in the background until a `InboundRequest` event happens,
@@ -1362,7 +1375,7 @@ mod tests {
 
 		// Ask swarm 1 to dial swarm 2. There isn't any discovery mechanism in place in this test,
 		// so they wouldn't connect to each other.
-		swarm_1.dial(listen_add_2).unwrap();
+		swarm_1.dial_addr(listen_add_2).unwrap();
 
 		// Run swarm 2 in the background, receiving two requests.
 		pool.spawner()

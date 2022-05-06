@@ -217,7 +217,8 @@ where
 
 	/// Take the value under a key.
 	pub fn take<KeyArg: EncodeLike<Key> + Clone>(key: KeyArg) -> QueryKind::Query {
-		let removed_value = <Self as MapWrapper>::Map::mutate_exists(key, |value| value.take());
+		let removed_value =
+			<Self as MapWrapper>::Map::mutate_exists(key, |value| core::mem::replace(value, None));
 		if removed_value.is_some() {
 			CounterFor::<Prefix>::mutate(|value| value.saturating_dec());
 		}
@@ -428,7 +429,7 @@ where
 			if cfg!(feature = "no-metadata-docs") {
 				vec![]
 			} else {
-				vec!["Counter for the related counted storage map"]
+				vec![&"Counter for the related counted storage map"]
 			},
 			entries,
 		);

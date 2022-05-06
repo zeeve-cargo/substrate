@@ -104,9 +104,9 @@ impl<Balance> ExistenceReason<Balance> {
 		if let ExistenceReason::DepositHeld(deposit) =
 			sp_std::mem::replace(self, ExistenceReason::DepositRefunded)
 		{
-			Some(deposit)
+			return Some(deposit)
 		} else {
-			None
+			return None
 		}
 	}
 }

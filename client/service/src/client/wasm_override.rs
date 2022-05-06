@@ -87,7 +87,7 @@ fn make_hash<K: std::hash::Hash + ?Sized>(val: &K) -> Vec<u8> {
 }
 
 impl FetchRuntimeCode for WasmBlob {
-	fn fetch_runtime_code(&self) -> Option<std::borrow::Cow<[u8]>> {
+	fn fetch_runtime_code<'a>(&'a self) -> Option<std::borrow::Cow<'a, [u8]>> {
 		Some(self.code.as_slice().into())
 	}
 }
@@ -186,30 +186,34 @@ impl WasmOverride {
 		for entry in fs::read_dir(dir).map_err(handle_err)? {
 			let entry = entry.map_err(handle_err)?;
 			let path = entry.path();
-			if let Some("wasm") = path.extension().and_then(|e| e.to_str()) {
-				let code = fs::read(&path).map_err(handle_err)?;
-				let code_hash = make_hash(&code);
-				let version = Self::runtime_version(executor, &code, &code_hash, Some(128))?;
-				tracing::info!(
-					target: "wasm_overrides",
-					version = %version,
-					file = %path.display(),
-					"Found wasm override.",
-				);
+			match path.extension().map(|e| e.to_str()).flatten() {
+				Some("wasm") => {
+					let code = fs::read(&path).map_err(handle_err)?;
+					let code_hash = make_hash(&code);
+					let version = Self::runtime_version(executor, &code, &code_hash, Some(128))?;
 
-				let wasm =
-					WasmBlob::new(code, code_hash, path.clone(), version.spec_name.to_string());
-
-				if let Some(other) = overrides.insert(version.spec_version, wasm) {
 					tracing::info!(
 						target: "wasm_overrides",
-						first = %other.path.display(),
-						second = %path.display(),
-						%version,
-						"Found duplicate spec version for runtime.",
+						version = %version,
+						file = %path.display(),
+						"Found wasm override.",
 					);
-					duplicates.push(path.display().to_string());
-				}
+
+					let wasm =
+						WasmBlob::new(code, code_hash, path.clone(), version.spec_name.to_string());
+
+					if let Some(other) = overrides.insert(version.spec_version, wasm) {
+						tracing::info!(
+							target: "wasm_overrides",
+							first = %other.path.display(),
+							second = %path.display(),
+							%version,
+							"Found duplicate spec version for runtime.",
+						);
+						duplicates.push(path.display().to_string());
+					}
+				},
+				_ => (),
 			}
 		}
 

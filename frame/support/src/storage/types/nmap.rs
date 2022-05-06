@@ -481,7 +481,7 @@ where
 			modifier: QueryKind::METADATA,
 			ty: StorageEntryType::Map {
 				key: scale_info::meta_type::<Key::Key>(),
-				hashers: Key::HASHER_METADATA.to_vec(),
+				hashers: Key::HASHER_METADATA.iter().cloned().collect(),
 				value: scale_info::meta_type::<Value>(),
 			},
 			default: OnEmpty::get().encode(),

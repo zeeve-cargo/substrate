@@ -33,17 +33,15 @@ use libp2p::{
 	identify::IdentifyInfo,
 	kad::record,
 	swarm::{
-		behaviour::toggle::Toggle, NetworkBehaviour, NetworkBehaviourAction,
-		NetworkBehaviourEventProcess, PollParameters,
+		toggle::Toggle, NetworkBehaviour, NetworkBehaviourAction, NetworkBehaviourEventProcess,
+		PollParameters,
 	},
 	NetworkBehaviour,
 };
 use log::debug;
 use prost::Message;
-use sc_client_api::{BlockBackend, ProofProvider};
 use sc_consensus::import_queue::{IncomingBlock, Origin};
 use sc_peerset::PeersetHandle;
-use sp_blockchain::{HeaderBackend, HeaderMetadata};
 use sp_consensus::BlockOrigin;
 use sp_runtime::{
 	traits::{Block as BlockT, NumberFor},
@@ -64,27 +62,17 @@ pub use crate::request_responses::{
 /// General behaviour of the network. Combines all protocols together.
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "BehaviourOut<B>", poll_method = "poll", event_process = true)]
-pub struct Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+pub struct Behaviour<B: BlockT> {
 	/// All the substrate-specific protocols.
-	substrate: Protocol<B, Client>,
+	substrate: Protocol<B>,
 	/// Periodically pings and identifies the nodes we are connected to, and store information in a
 	/// cache.
 	peer_info: peer_info::PeerInfoBehaviour,
 	/// Discovers nodes of the network.
 	discovery: DiscoveryBehaviour,
 	/// Bitswap server for blockchain data.
-	bitswap: Toggle<Bitswap<B, Client>>,
-	/// Generic request-response protocols.
+	bitswap: Toggle<Bitswap<B>>,
+	/// Generic request-reponse protocols.
 	request_responses: request_responses::RequestResponsesBehaviour,
 
 	/// Queue of events to produce for the outside.
@@ -203,27 +191,17 @@ pub enum BehaviourOut<B: BlockT> {
 	Dht(DhtEvent, Duration),
 }
 
-impl<B, Client> Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> Behaviour<B> {
 	/// Builds a new `Behaviour`.
 	pub fn new(
-		substrate: Protocol<B, Client>,
+		substrate: Protocol<B>,
 		user_agent: String,
 		local_public_key: PublicKey,
 		disco_config: DiscoveryConfig,
 		block_request_protocol_config: request_responses::ProtocolConfig,
 		state_request_protocol_config: request_responses::ProtocolConfig,
 		warp_sync_protocol_config: Option<request_responses::ProtocolConfig>,
-		bitswap: Option<Bitswap<B, Client>>,
+		bitswap: Option<Bitswap<B>>,
 		light_client_request_protocol_config: request_responses::ProtocolConfig,
 		// All remaining request protocol configs.
 		mut request_response_protocols: Vec<request_responses::ProtocolConfig>,
@@ -315,18 +293,18 @@ where
 	}
 
 	/// Returns a shared reference to the user protocol.
-	pub fn user_protocol(&self) -> &Protocol<B, Client> {
+	pub fn user_protocol(&self) -> &Protocol<B> {
 		&self.substrate
 	}
 
 	/// Returns a mutable reference to the user protocol.
-	pub fn user_protocol_mut(&mut self) -> &mut Protocol<B, Client> {
+	pub fn user_protocol_mut(&mut self) -> &mut Protocol<B> {
 		&mut self.substrate
 	}
 
 	/// Start querying a record from the DHT. Will later produce either a `ValueFound` or a
 	/// `ValueNotFound` event.
-	pub fn get_value(&mut self, key: record::Key) {
+	pub fn get_value(&mut self, key: &record::Key) {
 		self.discovery.get_value(key);
 	}
 
@@ -347,33 +325,13 @@ fn reported_roles_to_observed_role(roles: Roles) -> ObservedRole {
 	}
 }
 
-impl<B, Client> NetworkBehaviourEventProcess<void::Void> for Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> NetworkBehaviourEventProcess<void::Void> for Behaviour<B> {
 	fn inject_event(&mut self, event: void::Void) {
 		void::unreachable(event)
 	}
 }
 
-impl<B, Client> NetworkBehaviourEventProcess<CustomMessageOutcome<B>> for Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> NetworkBehaviourEventProcess<CustomMessageOutcome<B>> for Behaviour<B> {
 	fn inject_event(&mut self, event: CustomMessageOutcome<B>) {
 		match event {
 			CustomMessageOutcome::BlockImport(origin, blocks) =>
@@ -434,6 +392,7 @@ where
 							"Trying to send warp sync request when no protocol is configured {:?}",
 							request,
 						);
+						return
 					},
 				},
 			CustomMessageOutcome::NotificationStreamOpened {
@@ -448,7 +407,7 @@ where
 					protocol,
 					negotiated_fallback,
 					role: reported_roles_to_observed_role(roles),
-					notifications_sink,
+					notifications_sink: notifications_sink.clone(),
 				});
 			},
 			CustomMessageOutcome::NotificationStreamReplaced {
@@ -476,17 +435,7 @@ where
 	}
 }
 
-impl<B, Client> NetworkBehaviourEventProcess<request_responses::Event> for Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> NetworkBehaviourEventProcess<request_responses::Event> for Behaviour<B> {
 	fn inject_event(&mut self, event: request_responses::Event) {
 		match event {
 			request_responses::Event::InboundRequest { peer, protocol, result } => {
@@ -508,17 +457,7 @@ where
 	}
 }
 
-impl<B, Client> NetworkBehaviourEventProcess<peer_info::PeerInfoEvent> for Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> NetworkBehaviourEventProcess<peer_info::PeerInfoEvent> for Behaviour<B> {
 	fn inject_event(&mut self, event: peer_info::PeerInfoEvent) {
 		let peer_info::PeerInfoEvent::Identified {
 			peer_id,
@@ -541,17 +480,7 @@ where
 	}
 }
 
-impl<B, Client> NetworkBehaviourEventProcess<DiscoveryOut> for Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> NetworkBehaviourEventProcess<DiscoveryOut> for Behaviour<B> {
 	fn inject_event(&mut self, out: DiscoveryOut) {
 		match out {
 			DiscoveryOut::UnroutablePeer(_peer_id) => {
@@ -585,22 +514,12 @@ where
 	}
 }
 
-impl<B, Client> Behaviour<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B>
-		+ BlockBackend<B>
-		+ HeaderMetadata<B, Error = sp_blockchain::Error>
-		+ ProofProvider<B>
-		+ Send
-		+ Sync
-		+ 'static,
-{
+impl<B: BlockT> Behaviour<B> {
 	fn poll(
 		&mut self,
 		_cx: &mut Context,
 		_: &mut impl PollParameters,
-	) -> Poll<NetworkBehaviourAction<BehaviourOut<B>, <Self as NetworkBehaviour>::ConnectionHandler>>
+	) -> Poll<NetworkBehaviourAction<BehaviourOut<B>, <Self as NetworkBehaviour>::ProtocolsHandler>>
 	{
 		if let Some(event) = self.events.pop_front() {
 			return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event))

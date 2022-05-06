@@ -619,9 +619,11 @@ impl Peerset {
 
 		self.update_time();
 
-		if self.reserved_nodes[set_id.0].1 && !self.reserved_nodes[set_id.0].0.contains(&peer_id) {
-			self.message_queue.push_back(Message::Reject(index));
-			return
+		if self.reserved_nodes[set_id.0].1 {
+			if !self.reserved_nodes[set_id.0].0.contains(&peer_id) {
+				self.message_queue.push_back(Message::Reject(index));
+				return
+			}
 		}
 
 		let not_connected = match self.data.peer(set_id.0, &peer_id) {
@@ -728,7 +730,8 @@ impl Stream for Peerset {
 				return Poll::Ready(Some(message))
 			}
 
-			if Future::poll(Pin::new(&mut self.next_periodic_alloc_slots), cx).is_ready() {
+			if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.next_periodic_alloc_slots), cx)
+			{
 				self.next_periodic_alloc_slots = Delay::new(Duration::new(1, 0));
 
 				for set_index in 0..self.data.num_sets() {
@@ -795,7 +798,7 @@ mod tests {
 
 	fn next_message(mut peerset: Peerset) -> Result<(Message, Peerset), ()> {
 		let next = futures::executor::block_on_stream(&mut peerset).next();
-		let message = next.ok_or(())?;
+		let message = next.ok_or_else(|| ())?;
 		Ok((message, peerset))
 	}
 

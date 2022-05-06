@@ -65,7 +65,6 @@ impl SubstrateCli for Cli {
 				),
 			"dev" => Box::new(chain_spec::development_config()),
 			"local" => Box::new(chain_spec::local_testnet_config()),
-			"my-chain" => Box::new(chain_spec::my_local_testnet_config()),
 			"fir" | "flaming-fir" => Box::new(chain_spec::flaming_fir_config()?),
 			"staging" => Box::new(chain_spec::staging_testnet_config()),
 			path =>
@@ -87,8 +86,7 @@ pub fn run() -> Result<()> {
 		None => {
 			let runner = cli.create_runner(&cli.run)?;
 			runner.run_node_until_exit(|config| async move {
-				service::new_full(config, cli.no_hardware_benchmarks)
-					.map_err(sc_cli::Error::Service)
+				service::new_full(config).map_err(sc_cli::Error::Service)
 			})
 		},
 		Some(Subcommand::Inspect(cmd)) => {
@@ -100,6 +98,8 @@ pub fn run() -> Result<()> {
 			let runner = cli.create_runner(cmd)?;
 
 			runner.sync_run(|config| {
+				let PartialComponents { client, backend, .. } = new_partial(&config)?;
+
 				// This switch needs to be in the client, since the client decides
 				// which sub-commands it wants to support.
 				match cmd {
@@ -114,25 +114,18 @@ pub fn run() -> Result<()> {
 
 						cmd.run::<Block, ExecutorDispatch>(config)
 					},
-					BenchmarkCmd::Block(cmd) => {
-						let PartialComponents { client, .. } = new_partial(&config)?;
-						cmd.run(client)
-					},
+					BenchmarkCmd::Block(cmd) => cmd.run(client),
 					BenchmarkCmd::Storage(cmd) => {
-						let PartialComponents { client, backend, .. } = new_partial(&config)?;
 						let db = backend.expose_db();
 						let storage = backend.expose_storage();
 
 						cmd.run(config, client, db, storage)
 					},
 					BenchmarkCmd::Overhead(cmd) => {
-						let PartialComponents { client, .. } = new_partial(&config)?;
 						let ext_builder = BenchmarkExtrinsicBuilder::new(client.clone());
 
 						cmd.run(config, client, inherent_benchmark_data()?, Arc::new(ext_builder))
 					},
-					BenchmarkCmd::Machine(cmd) =>
-						cmd.run(&config, SUBSTRATE_REFERENCE_HARDWARE.clone()),
 				}
 			})
 		},
@@ -182,7 +175,7 @@ pub fn run() -> Result<()> {
 			let runner = cli.create_runner(cmd)?;
 			runner.async_run(|config| {
 				let PartialComponents { client, task_manager, backend, .. } = new_partial(&config)?;
-				let aux_revert = Box::new(|client: Arc<FullClient>, backend, blocks| {
+				let aux_revert = Box::new(move |client: Arc<FullClient>, backend, blocks| {
 					sc_consensus_babe::revert(client.clone(), backend, blocks)?;
 					grandpa::revert(client, blocks)?;
 					Ok(())
@@ -208,9 +201,5 @@ pub fn run() -> Result<()> {
 		Some(Subcommand::TryRuntime) => Err("TryRuntime wasn't enabled when building the node. \
 				You can enable it with `--features try-runtime`."
 			.into()),
-		Some(Subcommand::ChainInfo(cmd)) => {
-			let runner = cli.create_runner(cmd)?;
-			runner.sync_run(|config| cmd.run::<Block>(&config))
-		},
 	}
 }

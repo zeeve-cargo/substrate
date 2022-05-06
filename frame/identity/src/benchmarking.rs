@@ -39,7 +39,11 @@ fn add_registrars<T: Config>(r: u32) -> Result<(), &'static str> {
 		let registrar: T::AccountId = account("registrar", i, SEED);
 		let _ = T::Currency::make_free_balance_be(&registrar, BalanceOf::<T>::max_value());
 		Identity::<T>::add_registrar(RawOrigin::Root.into(), registrar.clone())?;
-		Identity::<T>::set_fee(RawOrigin::Signed(registrar.clone()).into(), i, 10u32.into())?;
+		Identity::<T>::set_fee(
+			RawOrigin::Signed(registrar.clone()).into(),
+			i.into(),
+			10u32.into(),
+		)?;
 		let fields =
 			IdentityFields(
 				IdentityField::Display |
@@ -48,7 +52,7 @@ fn add_registrars<T: Config>(r: u32) -> Result<(), &'static str> {
 					IdentityField::PgpFingerprint |
 					IdentityField::Image | IdentityField::Twitter,
 			);
-		Identity::<T>::set_fields(RawOrigin::Signed(registrar.clone()).into(), i, fields)?;
+		Identity::<T>::set_fields(RawOrigin::Signed(registrar.clone()).into(), i.into(), fields)?;
 	}
 
 	assert_eq!(Registrars::<T>::get().len(), r as usize);
@@ -71,9 +75,9 @@ fn create_sub_accounts<T: Config>(
 	}
 
 	// Set identity so `set_subs` does not fail.
-	let _ = T::Currency::make_free_balance_be(who, BalanceOf::<T>::max_value() / 2u32.into());
+	let _ = T::Currency::make_free_balance_be(&who, BalanceOf::<T>::max_value() / 2u32.into());
 	let info = create_identity_info::<T>(1);
-	Identity::<T>::set_identity(who_origin.into(), Box::new(info))?;
+	Identity::<T>::set_identity(who_origin.clone().into(), Box::new(info))?;
 
 	Ok(subs)
 }
@@ -97,7 +101,7 @@ fn add_sub_accounts<T: Config>(
 fn create_identity_info<T: Config>(num_fields: u32) -> IdentityInfo<T::MaxAdditionalFields> {
 	let data = Data::Raw(vec![0; 32].try_into().unwrap());
 
-	IdentityInfo {
+	let info = IdentityInfo {
 		additional: vec![(data.clone(), data.clone()); num_fields as usize].try_into().unwrap(),
 		display: data.clone(),
 		legal: data.clone(),
@@ -106,8 +110,10 @@ fn create_identity_info<T: Config>(num_fields: u32) -> IdentityInfo<T::MaxAdditi
 		email: data.clone(),
 		pgp_fingerprint: Some([0; 20]),
 		image: data.clone(),
-		twitter: data,
-	}
+		twitter: data.clone(),
+	};
+
+	return info
 }
 
 benchmarks! {
@@ -276,7 +282,7 @@ benchmarks! {
 
 		Identity::<T>::add_registrar(RawOrigin::Root.into(), caller.clone())?;
 		let registrars = Registrars::<T>::get();
-		ensure!(registrars[r as usize].as_ref().unwrap().account == caller, "id not set.");
+		ensure!(registrars[r as usize].as_ref().unwrap().account == caller.clone(), "id not set.");
 	}: _(RawOrigin::Signed(caller), r, account("new", 0, SEED))
 	verify {
 		let registrars = Registrars::<T>::get();
@@ -319,7 +325,7 @@ benchmarks! {
 		};
 
 		Identity::<T>::add_registrar(RawOrigin::Root.into(), caller.clone())?;
-		Identity::<T>::request_judgement(user_origin, r, 10u32.into())?;
+		Identity::<T>::request_judgement(user_origin.clone(), r, 10u32.into())?;
 	}: _(RawOrigin::Signed(caller), r, user_lookup, Judgement::Reasonable)
 	verify {
 		assert_last_event::<T>(Event::<T>::JudgementGiven { target: user, registrar_index: r }.into())

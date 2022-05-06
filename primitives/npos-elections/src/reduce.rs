@@ -94,7 +94,7 @@ fn merge<A: IdentifierT>(voter_root_path: Vec<NodeRef<A>>, target_root_path: Vec
 	shorter_path
 		.iter()
 		.zip(shorter_path.iter().skip(1))
-		.for_each(|(voter, next)| Node::set_parent_of(next, voter));
+		.for_each(|(voter, next)| Node::set_parent_of(&next, &voter));
 	Node::set_parent_of(&shorter_path[0], &longer_path[0]);
 }
 
@@ -524,10 +524,12 @@ fn reduce_all<A: IdentifierT>(assignments: &mut Vec<StakedAssignment<A>>) -> u32
 											} else {
 												ass.distribution[idx].1.saturating_sub(min_value)
 											}
-										} else if start_operation_add {
-											ass.distribution[idx].1.saturating_sub(min_value)
 										} else {
-											ass.distribution[idx].1.saturating_add(min_value)
+											if start_operation_add {
+												ass.distribution[idx].1.saturating_sub(min_value)
+											} else {
+												ass.distribution[idx].1.saturating_add(min_value)
+											}
 										};
 
 										if next_value.is_zero() {
@@ -567,10 +569,12 @@ fn reduce_all<A: IdentifierT>(assignments: &mut Vec<StakedAssignment<A>>) -> u32
 											} else {
 												ass.distribution[idx].1.saturating_add(min_value)
 											}
-										} else if start_operation_add {
-											ass.distribution[idx].1.saturating_add(min_value)
 										} else {
-											ass.distribution[idx].1.saturating_sub(min_value)
+											if start_operation_add {
+												ass.distribution[idx].1.saturating_add(min_value)
+											} else {
+												ass.distribution[idx].1.saturating_sub(min_value)
+											}
 										};
 
 										if next_value.is_zero() {

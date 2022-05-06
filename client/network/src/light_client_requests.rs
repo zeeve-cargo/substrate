@@ -27,7 +27,11 @@ use std::time::Duration;
 
 /// Generate the light client protocol name from chain specific protocol identifier.
 fn generate_protocol_name(protocol_id: &ProtocolId) -> String {
-	format!("/{}/light/2", protocol_id.as_ref())
+	let mut s = String::new();
+	s.push_str("/");
+	s.push_str(protocol_id.as_ref());
+	s.push_str("/light/2");
+	s
 }
 
 /// Generates a [`ProtocolConfig`] for the light client request protocol, refusing incoming

@@ -18,6 +18,7 @@
 //! `crate::request_responses::RequestResponsesBehaviour`.
 
 use crate::{
+	chain::Client,
 	config::ProtocolId,
 	request_responses::{IncomingRequest, OutgoingResponse, ProtocolConfig},
 	schema::v1::{KeyValueStateEntry, StateEntry, StateRequest, StateResponse},
@@ -31,7 +32,6 @@ use futures::{
 use log::{debug, trace};
 use lru::LruCache;
 use prost::Message;
-use sc_client_api::ProofProvider;
 use sp_runtime::{generic::BlockId, traits::Block as BlockT};
 use std::{
 	hash::{Hash, Hasher},
@@ -63,7 +63,11 @@ pub fn generate_protocol_config(protocol_id: &ProtocolId) -> ProtocolConfig {
 
 /// Generate the state protocol name from chain specific protocol identifier.
 fn generate_protocol_name(protocol_id: &ProtocolId) -> String {
-	format!("/{}/state/2", protocol_id.as_ref())
+	let mut s = String::new();
+	s.push_str("/");
+	s.push_str(protocol_id.as_ref());
+	s.push_str("/state/2");
+	s
 }
 
 /// The key of [`BlockRequestHandler::seen_requests`].
@@ -92,8 +96,8 @@ enum SeenRequestsValue {
 }
 
 /// Handler for incoming block requests from a remote peer.
-pub struct StateRequestHandler<B: BlockT, Client> {
-	client: Arc<Client>,
+pub struct StateRequestHandler<B: BlockT> {
+	client: Arc<dyn Client<B>>,
 	request_receiver: mpsc::Receiver<IncomingRequest>,
 	/// Maps from request to number of times we have seen this request.
 	///
@@ -101,15 +105,11 @@ pub struct StateRequestHandler<B: BlockT, Client> {
 	seen_requests: LruCache<SeenRequestsKey<B>, SeenRequestsValue>,
 }
 
-impl<B, Client> StateRequestHandler<B, Client>
-where
-	B: BlockT,
-	Client: ProofProvider<B> + Send + Sync + 'static,
-{
+impl<B: BlockT> StateRequestHandler<B> {
 	/// Create a new [`StateRequestHandler`].
 	pub fn new(
 		protocol_id: &ProtocolId,
-		client: Arc<Client>,
+		client: Arc<dyn Client<B>>,
 		num_peer_hint: usize,
 	) -> (Self, ProtocolConfig) {
 		// Reserve enough request slots for one request per peer when we are at the maximum
@@ -148,7 +148,8 @@ where
 		let request = StateRequest::decode(&payload[..])?;
 		let block: B::Hash = Decode::decode(&mut request.block.as_ref())?;
 
-		let key = SeenRequestsKey { peer: *peer, block, start: request.start.clone() };
+		let key =
+			SeenRequestsKey { peer: *peer, block: block.clone(), start: request.start.clone() };
 
 		let mut reputation_changes = Vec::new();
 

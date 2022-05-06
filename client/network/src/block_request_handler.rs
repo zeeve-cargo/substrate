@@ -18,6 +18,7 @@
 //! `crate::request_responses::RequestResponsesBehaviour`.
 
 use crate::{
+	chain::Client,
 	config::ProtocolId,
 	protocol::message::BlockAttributes,
 	request_responses::{IncomingRequest, OutgoingResponse, ProtocolConfig},
@@ -32,8 +33,6 @@ use futures::{
 use log::debug;
 use lru::LruCache;
 use prost::Message;
-use sc_client_api::BlockBackend;
-use sp_blockchain::HeaderBackend;
 use sp_runtime::{
 	generic::BlockId,
 	traits::{Block as BlockT, Header, One, Zero},
@@ -114,8 +113,8 @@ enum SeenRequestsValue {
 }
 
 /// Handler for incoming block requests from a remote peer.
-pub struct BlockRequestHandler<B: BlockT, Client> {
-	client: Arc<Client>,
+pub struct BlockRequestHandler<B: BlockT> {
+	client: Arc<dyn Client<B>>,
 	request_receiver: mpsc::Receiver<IncomingRequest>,
 	/// Maps from request to number of times we have seen this request.
 	///
@@ -123,15 +122,11 @@ pub struct BlockRequestHandler<B: BlockT, Client> {
 	seen_requests: LruCache<SeenRequestsKey<B>, SeenRequestsValue>,
 }
 
-impl<B, Client> BlockRequestHandler<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B> + BlockBackend<B> + Send + Sync + 'static,
-{
+impl<B: BlockT> BlockRequestHandler<B> {
 	/// Create a new [`BlockRequestHandler`].
 	pub fn new(
 		protocol_id: &ProtocolId,
-		client: Arc<Client>,
+		client: Arc<dyn Client<B>>,
 		num_peer_hint: usize,
 	) -> (Self, ProtocolConfig) {
 		// Reserve enough request slots for one request per peer when we are at the maximum
@@ -197,7 +192,7 @@ where
 			peer: *peer,
 			max_blocks,
 			direction,
-			from: from_block_id,
+			from: from_block_id.clone(),
 			attributes,
 			support_multiple_justifications,
 		};

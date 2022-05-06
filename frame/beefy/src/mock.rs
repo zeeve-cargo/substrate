@@ -145,7 +145,8 @@ pub fn new_test_ext_raw_authorities(authorities: Vec<(u64, BeefyId)>) -> TestExt
 
 	let session_keys: Vec<_> = authorities
 		.iter()
-		.map(|id| (id.0 as u64, id.0 as u64, MockSessionKeys { dummy: id.1.clone() }))
+		.enumerate()
+		.map(|(_, id)| (id.0 as u64, id.0 as u64, MockSessionKeys { dummy: id.1.clone() }))
 		.collect();
 
 	BasicExternalities::execute_with_storage(&mut t, || {

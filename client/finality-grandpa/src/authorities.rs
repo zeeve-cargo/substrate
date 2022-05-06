@@ -557,7 +557,8 @@ where
 			fork_tree::FinalizationResult::Changed(change) => {
 				status.changed = true;
 
-				let pending_forced_changes = std::mem::take(&mut self.pending_forced_changes);
+				let pending_forced_changes =
+					std::mem::replace(&mut self.pending_forced_changes, Vec::new());
 
 				// we will keep all forced changes for any later blocks and that are a
 				// descendent of the finalized block (i.e. they are part of this branch).

@@ -16,11 +16,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::schema::v1::{StateEntry, StateRequest, StateResponse};
+use super::StateDownloadProgress;
+use crate::{
+	chain::{Client, ImportedState},
+	schema::v1::{StateEntry, StateRequest, StateResponse},
+};
 use codec::{Decode, Encode};
 use log::debug;
-use sc_client_api::{CompactProof, ProofProvider};
-use sc_consensus::ImportedState;
+use sc_client_api::CompactProof;
 use smallvec::SmallVec;
 use sp_core::storage::well_known_keys;
 use sp_runtime::traits::{Block as BlockT, Header, NumberFor};
@@ -30,25 +33,16 @@ use std::{collections::HashMap, sync::Arc};
 
 /// State sync state machine. Accumulates partial state data until it
 /// is ready to be imported.
-pub struct StateSync<B: BlockT, Client> {
+pub struct StateSync<B: BlockT> {
 	target_block: B::Hash,
 	target_header: B::Header,
 	target_root: B::Hash,
 	last_key: SmallVec<[Vec<u8>; 2]>,
 	state: HashMap<Vec<u8>, (Vec<(Vec<u8>, Vec<u8>)>, Vec<Vec<u8>>)>,
 	complete: bool,
-	client: Arc<Client>,
+	client: Arc<dyn Client<B>>,
 	imported_bytes: u64,
 	skip_proof: bool,
-}
-
-/// Reported state download progress.
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct StateDownloadProgress {
-	/// Estimated download percentage.
-	pub percentage: u32,
-	/// Total state size in bytes downloaded so far.
-	pub size: u64,
 }
 
 /// Import state chunk result.
@@ -61,17 +55,13 @@ pub enum ImportResult<B: BlockT> {
 	BadResponse,
 }
 
-impl<B, Client> StateSync<B, Client>
-where
-	B: BlockT,
-	Client: ProofProvider<B> + Send + Sync + 'static,
-{
+impl<B: BlockT> StateSync<B> {
 	///  Create a new instance.
-	pub fn new(client: Arc<Client>, target: B::Header, skip_proof: bool) -> Self {
+	pub fn new(client: Arc<dyn Client<B>>, target: B::Header, skip_proof: bool) -> Self {
 		Self {
 			client,
 			target_block: target.hash(),
-			target_root: *target.state_root(),
+			target_root: target.state_root().clone(),
 			target_header: target,
 			last_key: SmallVec::default(),
 			state: HashMap::default(),
@@ -81,7 +71,7 @@ where
 		}
 	}
 
-	///  Validate and import a state response.
+	///  Validate and import a state reponse.
 	pub fn import(&mut self, response: StateResponse) -> ImportResult<B> {
 		if response.entries.is_empty() && response.proof.is_empty() {
 			debug!(target: "sync", "Bad state response");
@@ -149,16 +139,18 @@ where
 				if entry.0.len() > 0 && entry.1.len() > 1 {
 					// Already imported child_trie with same root.
 					// Warning this will not work with parallel download.
-				} else if entry.0.is_empty() {
-					for (key, _value) in key_values.iter() {
-						self.imported_bytes += key.len() as u64;
-					}
-
-					entry.0 = key_values;
 				} else {
-					for (key, value) in key_values {
-						self.imported_bytes += key.len() as u64;
-						entry.0.push((key, value))
+					if entry.0.is_empty() {
+						for (key, _value) in key_values.iter() {
+							self.imported_bytes += key.len() as u64;
+						}
+
+						entry.0 = key_values;
+					} else {
+						for (key, value) in key_values {
+							self.imported_bytes += key.len() as u64;
+							entry.0.push((key, value))
+						}
 					}
 				}
 			}
@@ -170,7 +162,7 @@ where
 			// the parent cursor stays valid.
 			// Empty parent trie content only happens when all the response content
 			// is part of a single child trie.
-			if self.last_key.len() == 2 && response.entries[0].entries.is_empty() {
+			if self.last_key.len() == 2 && response.entries[0].entries.len() == 0 {
 				// Do not remove the parent trie position.
 				self.last_key.pop();
 			} else {
@@ -218,7 +210,7 @@ where
 				self.target_block,
 				self.target_header.clone(),
 				ImportedState {
-					block: self.target_block,
+					block: self.target_block.clone(),
 					state: std::mem::take(&mut self.state).into(),
 				},
 			)

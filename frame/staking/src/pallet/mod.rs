@@ -30,7 +30,7 @@ use frame_support::{
 use frame_system::{ensure_root, ensure_signed, offchain::SendTransactionTypes, pallet_prelude::*};
 use sp_runtime::{
 	traits::{CheckedSub, SaturatedConversion, StaticLookup, Zero},
-	Perbill, Percent,
+	DispatchError, Perbill, Percent,
 };
 use sp_staking::{EraIndex, SessionIndex};
 use sp_std::{cmp::max, prelude::*};
@@ -75,22 +75,8 @@ pub mod pallet {
 	#[pallet::config]
 	pub trait Config: frame_system::Config + SendTransactionTypes<Call<Self>> {
 		/// The staking balance.
-		type Currency: LockableCurrency<
-			Self::AccountId,
-			Moment = Self::BlockNumber,
-			Balance = Self::CurrencyBalance,
-		>;
-		/// Just the `Currency::Balance` type; we have this item to allow us to constrain it to
-		/// `From<u64>`.
-		type CurrencyBalance: sp_runtime::traits::AtLeast32BitUnsigned
-			+ codec::FullCodec
-			+ Copy
-			+ MaybeSerializeDeserialize
-			+ sp_std::fmt::Debug
-			+ Default
-			+ From<u64>
-			+ TypeInfo
-			+ MaxEncodedLen;
+		type Currency: LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
+
 		/// Time used for computing era duration.
 		///
 		/// It is guaranteed to start being called from the first `on_finalize`. Thus value at
@@ -135,8 +121,6 @@ pub mod pallet {
 		type Slash: OnUnbalanced<NegativeImbalanceOf<Self>>;
 
 		/// Handler for the unbalanced increment when rewarding a staker.
-		/// NOTE: in most cases, the implementation of `OnUnbalanced` should modify the total
-		/// issuance.
 		type Reward: OnUnbalanced<PositiveImbalanceOf<Self>>;
 
 		/// Number of sessions per era.
@@ -190,10 +174,6 @@ pub mod pallet {
 		/// determines how many unique eras a staker may be unbonding in.
 		#[pallet::constant]
 		type MaxUnlockingChunks: Get<u32>;
-
-		/// A hook called when any staker is slashed. Mostly likely this can be a no-op unless
-		/// other pallets exist that are affected by slashing per-staker.
-		type OnStakerSlash: sp_staking::OnStakerSlash<Self::AccountId, BalanceOf<Self>>;
 
 		/// Some parameters of the benchmarking.
 		type BenchmarkingConfig: BenchmarkingConfig;
@@ -257,7 +237,8 @@ pub mod pallet {
 	/// Map from all (unlocked) "controller" accounts to the info regarding the staking.
 	#[pallet::storage]
 	#[pallet::getter(fn ledger)]
-	pub type Ledger<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, StakingLedger<T>>;
+	pub type Ledger<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, StakingLedger<T::AccountId, BalanceOf<T>>>;
 
 	/// Where the reward payment should be made. Keyed by stash.
 	#[pallet::storage]
@@ -580,7 +561,7 @@ pub mod pallet {
 					status
 				);
 				assert!(
-					T::Currency::free_balance(stash) >= balance,
+					T::Currency::free_balance(&stash) >= balance,
 					"Stash does not have enough balance to bond."
 				);
 				frame_support::assert_ok!(<Pallet<T>>::bond(
@@ -647,8 +628,6 @@ pub mod pallet {
 		Chilled(T::AccountId),
 		/// The stakers' rewards are getting paid. \[era_index, validator_stash\]
 		PayoutStarted(EraIndex, T::AccountId),
-		/// A validator has set their preferences.
-		ValidatorPrefsSet(T::AccountId, ValidatorPrefs),
 	}
 
 	#[pallet::error]
@@ -779,18 +758,18 @@ pub mod pallet {
 			let stash = ensure_signed(origin)?;
 
 			if <Bonded<T>>::contains_key(&stash) {
-				return Err(Error::<T>::AlreadyBonded.into())
+				Err(Error::<T>::AlreadyBonded)?
 			}
 
 			let controller = T::Lookup::lookup(controller)?;
 
 			if <Ledger<T>>::contains_key(&controller) {
-				return Err(Error::<T>::AlreadyPaired.into())
+				Err(Error::<T>::AlreadyPaired)?
 			}
 
 			// Reject a bond which is considered to be _dust_.
 			if value < T::Currency::minimum_balance() {
-				return Err(Error::<T>::InsufficientBond.into())
+				Err(Error::<T>::InsufficientBond)?
 			}
 
 			frame_system::Pallet::<T>::inc_consumers(&stash).map_err(|_| Error::<T>::BadState)?;
@@ -862,7 +841,7 @@ pub mod pallet {
 					debug_assert_eq!(T::VoterList::sanity_check(), Ok(()));
 				}
 
-				Self::deposit_event(Event::<T>::Bonded(stash, extra));
+				Self::deposit_event(Event::<T>::Bonded(stash.clone(), extra));
 			}
 			Ok(())
 		}
@@ -1037,9 +1016,7 @@ pub mod pallet {
 			}
 
 			Self::do_remove_nominator(stash);
-			Self::do_add_validator(stash, prefs.clone());
-			Self::deposit_event(Event::<T>::ValidatorPrefsSet(ledger.stash, prefs));
-
+			Self::do_add_validator(stash, prefs);
 			Ok(())
 		}
 
@@ -1132,7 +1109,7 @@ pub mod pallet {
 
 		/// (Re-)set the payment target for a controller.
 		///
-		/// Effects will be felt instantly (as soon as this function is completed successfully).
+		/// Effects will be felt at the beginning of the next era.
 		///
 		/// The dispatch origin for this call must be _Signed_ by the controller, not the stash.
 		///
@@ -1160,7 +1137,7 @@ pub mod pallet {
 
 		/// (Re-)set the controller of a stash.
 		///
-		/// Effects will be felt instantly (as soon as this function is completed successfully).
+		/// Effects will be felt at the beginning of the next era.
 		///
 		/// The dispatch origin for this call must be _Signed_ by the stash, not the controller.
 		///
@@ -1183,7 +1160,7 @@ pub mod pallet {
 			let old_controller = Self::bonded(&stash).ok_or(Error::<T>::NotStash)?;
 			let controller = T::Lookup::lookup(controller)?;
 			if <Ledger<T>>::contains_key(&controller) {
-				return Err(Error::<T>::AlreadyPaired.into())
+				Err(Error::<T>::AlreadyPaired)?
 			}
 			if controller != old_controller {
 				<Bonded<T>>::insert(&stash, &controller);
@@ -1466,8 +1443,8 @@ pub mod pallet {
 			ensure_root(origin)?;
 			if let Some(current_era) = Self::current_era() {
 				HistoryDepth::<T>::mutate(|history_depth| {
-					let last_kept = current_era.saturating_sub(*history_depth);
-					let new_last_kept = current_era.saturating_sub(new_history_depth);
+					let last_kept = current_era.checked_sub(*history_depth).unwrap_or(0);
+					let new_last_kept = current_era.checked_sub(new_history_depth).unwrap_or(0);
 					for era_index in last_kept..new_last_kept {
 						Self::clear_era_information(era_index);
 					}

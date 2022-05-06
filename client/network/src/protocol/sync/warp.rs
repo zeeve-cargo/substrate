@@ -17,44 +17,23 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ///! Warp sync support.
-use super::state::{ImportResult, StateSync};
-use crate::schema::v1::{StateRequest, StateResponse};
+pub use super::state::ImportResult;
+use super::state::StateSync;
 pub use crate::warp_request_handler::{
 	EncodedProof, Request as WarpProofRequest, VerificationResult, WarpSyncProvider,
 };
-use sc_client_api::ProofProvider;
-use sp_blockchain::HeaderBackend;
+use crate::{
+	chain::Client,
+	schema::v1::{StateRequest, StateResponse},
+	WarpSyncPhase, WarpSyncProgress,
+};
 use sp_finality_grandpa::{AuthorityList, SetId};
 use sp_runtime::traits::{Block as BlockT, NumberFor, Zero};
 use std::sync::Arc;
 
-enum Phase<B: BlockT, Client> {
+enum Phase<B: BlockT> {
 	WarpProof { set_id: SetId, authorities: AuthorityList, last_hash: B::Hash },
-	State(StateSync<B, Client>),
-}
-
-/// Reported warp sync phase.
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub enum WarpSyncPhase<B: BlockT> {
-	/// Waiting for peers to connect.
-	AwaitingPeers,
-	/// Downloading and verifying grandpa warp proofs.
-	DownloadingWarpProofs,
-	/// Downloading state data.
-	DownloadingState,
-	/// Importing state.
-	ImportingState,
-	/// Downloading block history.
-	DownloadingBlocks(NumberFor<B>),
-}
-
-/// Reported warp sync progress.
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct WarpSyncProgress<B: BlockT> {
-	/// Estimated download percentage.
-	pub phase: WarpSyncPhase<B>,
-	/// Total bytes downloaded so far.
-	pub total_bytes: u64,
+	State(StateSync<B>),
 }
 
 /// Import warp proof result.
@@ -66,20 +45,19 @@ pub enum WarpProofImportResult {
 }
 
 /// Warp sync state machine. Accumulates warp proofs and state.
-pub struct WarpSync<B: BlockT, Client> {
-	phase: Phase<B, Client>,
-	client: Arc<Client>,
+pub struct WarpSync<B: BlockT> {
+	phase: Phase<B>,
+	client: Arc<dyn Client<B>>,
 	warp_sync_provider: Arc<dyn WarpSyncProvider<B>>,
 	total_proof_bytes: u64,
 }
 
-impl<B, Client> WarpSync<B, Client>
-where
-	B: BlockT,
-	Client: HeaderBackend<B> + ProofProvider<B> + 'static,
-{
+impl<B: BlockT> WarpSync<B> {
 	///  Create a new instance.
-	pub fn new(client: Arc<Client>, warp_sync_provider: Arc<dyn WarpSyncProvider<B>>) -> Self {
+	pub fn new(
+		client: Arc<dyn Client<B>>,
+		warp_sync_provider: Arc<dyn WarpSyncProvider<B>>,
+	) -> Self {
 		let last_hash = client.hash(Zero::zero()).unwrap().expect("Genesis header always exists");
 		let phase = Phase::WarpProof {
 			set_id: 0,
@@ -94,7 +72,7 @@ where
 		match &mut self.phase {
 			Phase::WarpProof { .. } => {
 				log::debug!(target: "sync", "Unexpected state response");
-				ImportResult::BadResponse
+				return ImportResult::BadResponse
 			},
 			Phase::State(sync) => sync.import(response),
 		}
@@ -111,13 +89,13 @@ where
 				match self.warp_sync_provider.verify(&response, *set_id, authorities.clone()) {
 					Err(e) => {
 						log::debug!(target: "sync", "Bad warp proof response: {}", e);
-						WarpProofImportResult::BadResponse
+						return WarpProofImportResult::BadResponse
 					},
 					Ok(VerificationResult::Partial(new_set_id, new_authorities, new_last_hash)) => {
 						log::debug!(target: "sync", "Verified partial proof, set_id={:?}", new_set_id);
 						*set_id = new_set_id;
 						*authorities = new_authorities;
-						*last_hash = new_last_hash;
+						*last_hash = new_last_hash.clone();
 						self.total_proof_bytes += response.0.len() as u64;
 						WarpProofImportResult::Success
 					},

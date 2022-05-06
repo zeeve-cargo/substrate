@@ -57,10 +57,10 @@ pub mod utils {
 	/// represent the current block `hash` and its `parent hash`, if given the
 	/// function that's returned will assume that `hash` isn't part of the local DB
 	/// yet, and all searches in the DB will instead reference the parent.
-	pub fn is_descendent_of<Block: BlockT, T>(
-		client: &T,
+	pub fn is_descendent_of<'a, Block: BlockT, T>(
+		client: &'a T,
 		current: Option<(Block::Hash, Block::Hash)>,
-	) -> impl Fn(&Block::Hash, &Block::Hash) -> Result<bool, Error> + '_
+	) -> impl Fn(&Block::Hash, &Block::Hash) -> Result<bool, Error> + 'a
 	where
 		T: HeaderBackend<Block> + HeaderMetadata<Block, Error = Error>,
 	{

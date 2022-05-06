@@ -466,24 +466,13 @@ fn should_trap_when_heap_exhausted(wasm_method: WasmExecutionMethod) {
 			RuntimeBlob::uncompress_if_needed(wasm_binary_unwrap()).unwrap(),
 			&mut ext.ext(),
 			true,
-			"test_allocate_vec",
-			&16777216_u32.encode(),
+			"test_exhaust_heap",
+			&[0],
 		)
+		.map_err(|e| e.to_string())
 		.unwrap_err();
 
-	match err {
-		#[cfg(feature = "wasmtime")]
-		Error::AbortedDueToTrap(error) if wasm_method == WasmExecutionMethod::Compiled => {
-			assert_eq!(
-				error.message,
-				r#"host code panicked while being called by the runtime: Failed to allocate memory: "Allocator ran out of space""#
-			);
-		},
-		Error::RuntimePanicked(error) if wasm_method == WasmExecutionMethod::Interpreted => {
-			assert_eq!(error, r#"Failed to allocate memory: "Allocator ran out of space""#);
-		},
-		error => panic!("unexpected error: {:?}", error),
-	}
+	assert!(err.contains("Allocator ran out of space"));
 }
 
 fn mk_test_runtime(wasm_method: WasmExecutionMethod, pages: u64) -> Arc<dyn WasmModule> {
